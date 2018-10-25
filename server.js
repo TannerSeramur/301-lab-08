@@ -65,6 +65,7 @@ function getLocation(request, response){
         cacheHit: (results) =>{
             console.log('got data from SQL');
             response.send(results.row[0]);  
+            // console.log(results.row[0], '*************');
         },
         cacheMiss: () =>{
             Location.fetchLocation(request.query.data)
@@ -89,55 +90,79 @@ Location.lookupLocation = (handler) =>{
     .catch(console.err);
 }
 
-// app.get('/location', (request, response)=>{
-//     searchToLatLong(request.query.data)
-//     .then(locationData=> {
-//         response.send(locationData);
-//     })
-//     .catch(err => handleError(err,response));
-// })
-
-// function searchToLatLong(query){
-//     const URL = (`https://maps.googleapis.com/maps/api/geocode/json?address=${query}&key=${process.env.GEOCODE_API_KEY}`);
-//     return superagent.get(URL)
-//         .then(data =>{
-//             if(!data.body.results.length){ throw `NO DATA`;}
-//             else{
-//                 let location = new Location(data.body.results[0]);
-//                 location.search_query = query; 
-//                 return location;
-//             }
-            
-
-//     })
-//     .catch(err => handleError(err));
-// }
-
-
-
-
-
-
 // weather stuff
-app.get('/weather',getWeatherData);
-
-function getWeatherData(request, response){
-    const URL = `https://api.darksky.net/forecast/${process.env.DARKSKY_API_KEY}/${request.query.data.latitude},${request.query.data.longitude}`;
-    return superagent.get(URL)
-        .then(results => {
-            const weatherArray = [];
-            results.body.daily.data.forEach((day)=>{
-                weatherArray.push(new Weather(day));
-            })
-            response.send(weatherArray);
-        })
-        .catch(err => handleError(err,response));
-}
+app.get('/weather',getWeather);
 
 function Weather(data){
-    this.time = new Date(data.time*1000).toString().slice(0,15);
     this.forecast = data.summary;
+    this.time = new Date(data.time*1000).toString().slice(0,15);
+    // this.location_id =;
 }
+Weather.prototype.save = function(){
+    let SQL = `
+    INSERT INTO weathers
+    (forecast,time,location_id)
+      VALUES($1,$2,$3)`;
+    let values = Object.values(this);
+    client.query(SQL, values);
+   };
+
+   Weather.lookup = function(handler) {
+    const SQL = `SELECT * FROM weathers WHERE location_id=$1;`;
+    client.query(SQL, [handler.location.id])
+      .then(result => {
+        if(result.rowCount > 0) {
+          console.log('Got data from SQL');
+          handler.cacheHit(result);
+        } else {
+          console.log('Got data from API');
+          handler.cacheMiss();
+        }
+      })
+      .catch(error => handleError(error));
+  };
+  Weather.fetch = function (location){
+    const URL = `https://api.darksky.net/forecast/${process.env.DARKSKY_API_KEY}/${request.query.data.latitude},${request.query.data.longitude}`;
+    return superagent.get(URL)
+      .then(result => {
+        const weatherSummaries = result.body.daily.data.map(day => {
+          const summary = new Weather(day);
+          summary.save(location.id);
+          return summary;
+        });
+        return weatherSummaries;
+      });
+   };
+
+   function getWeather(request, response){
+    const handler = {
+      cacheHit: function(result) {
+        response.send(result.rows);
+      },
+      cacheMiss: function() {
+        Weather.fetch(request.query.data)
+          .then( results => response.send(results) )
+          .catch( console.error );
+      },
+    };
+    Weather.lookup(handler);
+   }
+
+
+
+// function getWeatherData(request, response){
+//     const URL = `https://api.darksky.net/forecast/${process.env.DARKSKY_API_KEY}/${request.query.data.latitude},${request.query.data.longitude}`;
+//     return superagent.get(URL)
+//         .then(results => {
+//             const weatherArray = [];
+//             results.body.daily.data.forEach((day)=>{
+//                 weatherArray.push(new Weather(day, query));
+//             })
+//             response.send(weatherArray);
+//         })
+//         .catch(err => handleError(err,response));
+// }
+
 
 // yelp
 app.get('/yelp', getYelp);
