@@ -4,50 +4,121 @@
 const express = require('express');
 const cors = require('cors');
 const superagent = require('superagent');
+const pg = require('pg');
 
 require('dotenv').config();
 
 const PORT = process.env.PORT;
+
+const client = new pg.Client(process.env.DATA_BASE_URL)
+client.connect();
+client.on('err', err=>console.log(err));
 
 const app = express();
 
 app.use(cors());
 
 function handleError(err, res){
-    console.log(`ERROR`, err);
+    console.error(err);
     if(res){res.status(500).send(`sorry no peanuts`);}
 }
+app.listen(PORT, ()=>{console.log(`app is running on ${PORT}`)});
 
-app.get('/location', (request, response)=>{
-    searchToLatLong(request.query.data)
-    .then(locationData=> {
-        response.send(locationData);
-    })
-    .catch(err => handleError(err,response));
-})
 
-function searchToLatLong(query){
-    const URL = (`https://maps.googleapis.com/maps/api/geocode/json?address=${query}&key=${process.env.GEOCODE_API_KEY}`);
-    return superagent.get(URL)
-        .then(data =>{
-            if(!data.body.results.length){ throw `NO DATA`;}
-            else{
-                let location = new Location(data.body.results[0]);
-                location.search_query = query; 
-                return location;
-            }
-            
+// location object stuff
 
-    })
-    .catch(err => handleError(err));
-}
+app.get('/location', getLocation);
 
-function Location(data){
+function Location(data, query){
+    this.search_query = query;
     this.formatted_query = data.formatted_address;
     this.latitude = data.geometry.location.lat;
     this.longitude = data.geometry.location.lng;
 }
 
+Location.prototype.save = function(){
+    let SQL = `
+    INSERT INTO locations
+        (search_query,formatted_query,latitude,longitude)
+        VALUES($1,$2,$3,$4)`;
+    let values = Object.values(this);
+    client.query(SQL, values);
+};
+Location.fetchLocation = (query) =>{
+    const URL = `https://maps.googleapis.com/maps/api/geocode/json?address=${query}&key=${process.env.GEOCODE_API_KEY}`;
+    return superagent.get(URL)
+        .then(data =>{
+            if(!data.body.results.length){ throw `NO DATA`;}
+            else{
+                let location = new Location(data.body.results[0],query);
+                location.save();
+                return location;
+            }  
+    })
+    .catch(console.err);
+}
+
+function getLocation(request, response){
+    const locationHandler = {
+        query: request.query.data,
+
+        cacheHit: (results) =>{
+            console.log('got data from SQL');
+            response.send(results.row[0]);  
+        },
+        cacheMiss: () =>{
+            Location.fetchLocation(request.query.data)
+            .then(data => response.send(data))
+        }
+    };
+
+    Location.lookupLocation(locationHandler);
+};
+
+Location.lookupLocation = (handler) =>{
+    const SQL = `SELECT * FROM locations WHERE search_query=$1`;
+    const values = [handler.query];
+    return client.query(SQL, values)
+    .then(results => {
+        if(results.rowCount > 0){
+            handler.cacheHit(results);
+        }else{
+            handler.cacheMiss();
+        }
+    })
+    .catch(console.err);
+}
+
+// app.get('/location', (request, response)=>{
+//     searchToLatLong(request.query.data)
+//     .then(locationData=> {
+//         response.send(locationData);
+//     })
+//     .catch(err => handleError(err,response));
+// })
+
+// function searchToLatLong(query){
+//     const URL = (`https://maps.googleapis.com/maps/api/geocode/json?address=${query}&key=${process.env.GEOCODE_API_KEY}`);
+//     return superagent.get(URL)
+//         .then(data =>{
+//             if(!data.body.results.length){ throw `NO DATA`;}
+//             else{
+//                 let location = new Location(data.body.results[0]);
+//                 location.search_query = query; 
+//                 return location;
+//             }
+            
+
+//     })
+//     .catch(err => handleError(err));
+// }
+
+
+
+
+
+
+// weather stuff
 app.get('/weather',getWeatherData);
 
 function getWeatherData(request, response){
@@ -157,8 +228,3 @@ function Hike(data){
     this.name = data.name;
 
 }
-
-
-app.listen(PORT, ()=>{
-    console.log(`app is running on ${PORT}`)
-});
